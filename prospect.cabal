@@ -19,6 +19,8 @@ executable prospect
     hourglass,
     process,
     cereal,
+    directory,
+    network,
     bytestring == 0.10.*,
     base >=4.8 && <4.9
   hs-source-dirs:   src

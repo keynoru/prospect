@@ -8,7 +8,7 @@ import Data.Word
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B
 
-import Control.Concurrent (threadDelay)
+import Control.Concurrent
 import System.Process
 import System.IO
 
@@ -19,16 +19,21 @@ import Data.Serialize (decode)
 
 import Battery
 import qualified Parser as I
+import Socket
 
 main :: IO ()
 main = do
     hSetBuffering stdout LineBuffering
-    delay <- oneLoop
-    threadDelay (1000 * 1000 * delay)
-    main
+    taskQueue <- newChan
+    writeChan taskQueue ()
+    sock <- unixSocket "/tmp/prospect.socket"
+    _ <- forkIO $ awaitTouch sock $ writeChan taskQueue ()
+    worker taskQueue
 
-oneLoop :: IO Int
-oneLoop = do
+worker :: Chan () -> IO a
+worker taskQueue = do
+    readChan taskQueue
+
     -- general ones
     bs <- mapM (\(f, command) -> fmap f (execShellGet command))
         [ (volume, "amixer -c 1 get Master")
@@ -52,7 +57,14 @@ oneLoop = do
 
     -- print them out
     B.putStrLn $ B.intercalate " | " $ batStr : stamp : bs
-    return (60 - sec)
+
+    _ <- forkIO $ timer (60 - sec) taskQueue
+    worker taskQueue
+
+timer :: Int -> Chan () -> IO ()
+timer n taskQueue = do
+    threadDelay (1000 * 1000 * n)
+    writeChan taskQueue ()
 
 battery :: [(BatteryInfo, ByteString)] -> ByteString
 battery = (B.intercalate ", ") . map snd
