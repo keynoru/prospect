@@ -4,6 +4,8 @@ import System.IO.Error
 import System.Directory
 import Network.Socket
 
+import Infinite
+
 unixSocket :: FilePath -> IO Socket
 unixSocket path = do
     catchIOError (removeFile path) (const $ return ())
@@ -12,8 +14,8 @@ unixSocket path = do
     listen s maxListenQueue
     return s
 
-awaitTouch :: Socket -> IO a -> IO b
+awaitTouch :: Socket -> IO Infinite -> IO b
 awaitTouch s action = do
     (_, _) <- accept s
-    _ <- action
-    awaitTouch s action
+    (Infinite newAction) <- action
+    awaitTouch s newAction

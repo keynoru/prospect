@@ -15,55 +15,65 @@ import System.IO
 import Data.Hourglass
 import System.Hourglass
 
-import Data.Serialize (decode)
-
 import Battery
 import qualified Parser as I
+import Infinite
 import Socket
 
 main :: IO ()
 main = do
     hSetBuffering stdout LineBuffering
+
+    sock <- unixSocket "/tmp/prospect.socket"
+    _ <- forkIO $ awaitTouch sock toggleReport
+
     taskQueue <- newChan
     writeChan taskQueue ()
-    sock <- unixSocket "/tmp/prospect.socket"
-    _ <- forkIO $ awaitTouch sock $ writeChan taskQueue ()
     worker taskQueue
 
-worker :: Chan () -> IO a
-worker taskQueue = do
-    readChan taskQueue
+toggleReport :: IO Infinite
+toggleReport = do
+    report <- statusReport
+    (Just dzenIn, _, _, _) <- createProcess $
+        (shell "dzen2 -y -1 -h 24")
+            { std_in = CreatePipe }
+    B.hPutStrLn dzenIn report
+    hFlush dzenIn
+    return $ Infinite $ hClose dzenIn >> return (Infinite toggleReport)
 
+statusReport :: IO ByteString
+statusReport = do
     -- general ones
     bs <- mapM (\(f, command) -> fmap f (execShellGet command))
         [ (volume, "amixer -c 1 get Master")
         ]
-
     -- special ones
+    bat <- fmap (maybe "(battery info error)" battery .
+        I.parseMaybe I.batteryInfos) $ execShellGet
+            "upower -i /org/freedesktop/UPower/devices/battery_BAT0"
+    stamp <- formattedTime
+    return $ B.intercalate " | " $ bat : stamp : bs
+
+worker :: Chan () -> IO a
+worker taskQueue = do
+    readChan taskQueue
     bat <- fmap (I.parseMaybe I.batteryInfos) $
         execShellGet "upower -i /org/freedesktop/UPower/devices/battery_BAT0"
-    batStr <- case bat of
-        Just infos -> case lookup Percentage infos of
-            Just b -> case decode (rdrop 1 b) of
-                Left _ -> return "(battery info parsing error)"
-                Right n -> if n < (100 :: Word8)
-                    then do
-                        _ <- execShell "notify-send Low battery"
-                        return $ battery infos
-                    else return $ battery infos
-            Nothing -> return "(battery info error)"
-        Nothing -> return "(battery info error)"
-    (stamp, sec) <- timeS
+    fromMaybe (return ()) $
+        bat >>= lookup Percentage >>= \ b ->
+            if readWord8 (rdrop 1 b) < 50
+                then return (notify b 2)
+                else return (return ())
 
-    -- print them out
-    B.putStrLn $ B.intercalate " | " $ batStr : stamp : bs
-
-    _ <- forkIO $ timer (60 - sec) taskQueue
+    _ <- forkIO $ timer 60 taskQueue
     worker taskQueue
+  where
+    readWord8 :: ByteString -> Word8
+    readWord8 = read . B.unpack
 
 timer :: Int -> Chan () -> IO ()
 timer n taskQueue = do
-    threadDelay (1000 * 1000 * n)
+    threadDelay $ 1000 * 1000 * n
     writeChan taskQueue ()
 
 battery :: [(BatteryInfo, ByteString)] -> ByteString
@@ -73,11 +83,8 @@ volume :: ByteString -> ByteString
 volume b = fromMaybe "(volume info error)" $
     fmap ("Master " `mappend`) (I.parseMaybe I.volumeInfo b)
 
--- returns formatted time in ByteString and seconds in Int.
-timeS :: IO (ByteString, Int)
-timeS = do
-    dt <- localDateCurrent
-    return (B.pack $ localTimePrint fmt dt, extractSecond dt)
+formattedTime :: IO ByteString
+formattedTime = fmap (B.pack . localTimePrint fmt) localDateCurrent
   where
     fmt =
         [ Format_Year4, Format_Text '-'
@@ -86,7 +93,6 @@ timeS = do
         , Format_Hour, Format_Text ':'
         , Format_Minute
         ]
-    extractSecond = fromIntegral . todSec . dtTime . localTimeUnwrap
 
 -- utility functions
 
@@ -101,3 +107,14 @@ execShellGet command = do
 
 execShell :: String -> IO ()
 execShell command = createProcess (shell command) >> return ()
+
+notify :: ByteString -> Int -> IO ()
+notify text delay = (return () <<) $ forkIO $ do
+    (Just dzenIn, _, _, _) <- createProcess $
+        (shell "dzen2 -x -600 -y 100 -tw 500 -h 24") { std_in = CreatePipe }
+    B.hPutStrLn dzenIn text
+    hFlush dzenIn
+    threadDelay $ 1000 * 1000 * delay
+    hClose dzenIn
+  where
+    (<<) = flip (>>)
