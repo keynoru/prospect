@@ -1,29 +1,34 @@
 Prospect is a status reporter for laptops, written in Haskell.
 
-If you know what [dzen](https://github.com/robm/dzen/) does, the concept should be very clear. Prospect responds to certain events and output a string line to `stdout`.
+The assumption is that you're using something bare-metal, like xmonad or a [compiz-only](https://askubuntu.com/questions/174806/standalone-of-compiz-and-google-chrome-with-borders) environment like me. If you know what [conky](http://conky.sourceforge.net/) and [dzen](https://github.com/robm/dzen/) does, the concept should be clear. Using dzen2, Prospect displays
+
+- Power (battery) status
+- Date and time
+- Sound volume
+
+It also displays warning when the remaining battery is lower than 50%.
 
 ## Why reinvent the wheel?
 
-Yes, there are better alternatives such as [conky](http://conky.sourceforge.net/).
+Yes, there are better alternatives. I just thought I'd write one for myself since I wouldn't need a full-featured status reporter when those three things were all I wanted.
 
-I used to use [xmonad](http://xmonad.org/) and eventually switched to [compiz](http://compiz.org/) for hardware rendering. So it was just bare compiz, and I was happy for a while, until recently I realized that there were things I manually look up too often that I really should have them just constantly displayed. Those were power status, time, and sound volume.
+## But this software does not look simple at all.
 
-I wanted something as simple as possible, and the way dzen worked seemed promising. I thought I must be able to write a simple script myself that does exactly what I want without any unnecessary overhead.
-
-### But this software doesn't look simple at all.
-
-While writing this software, I became immersed into the joy of programming too much that I forgot the original purpose and went on to reckless coding. I deeply regret. Next time I'll use Python and ...
+While writing I became too immersed into the joy of programming that I forgot the original purpose and went on to reckless coding. I deeply regret. This is software sin. Stone me.
 
 ## Usage
 
 In the repo directory:
 
 ```sh
-$ cabal build
-$ ./dist/build/prospect/prospect | dzen
+$ cabal configure && cabal build
+$ ./dist/build/prospect/prospect
 ```
+
+Now `./dist/build/prospect-touch/prospect-touch` will toggle the bar.
 
 ## Todo
 
 - Avoid the `createProcess (shell "command")` evil.
-- Mitigate `ByteString` (strict) concatenation overhead.
+- Respond to volume changing events. (Or at least have a "update" command interface.)
+- `threadDelay` may take more than 60 seconds.

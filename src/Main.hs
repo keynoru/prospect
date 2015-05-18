@@ -3,88 +3,102 @@
 module Main where
 
 import Data.Maybe
-import Data.Word
 
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B
+import Data.ByteString.Builder
 
 import Control.Concurrent
 import System.Process
-import System.IO
+import System.IO hiding (char8)
 
 import Data.Hourglass
 import System.Hourglass
 
 import Battery
-import qualified Parser as I
+import qualified Parser as P
 import Infinite
 import Socket
+
+data BarSignal = DeleteBar | CreateBar | UpdateBar (Maybe Battery)
 
 main :: IO ()
 main = do
     hSetBuffering stdout LineBuffering
 
+    barQueue <- newChan
+    writeChan barQueue CreateBar
+    _ <- forkIO $ barWorker barQueue Nothing
+
     sock <- unixSocket "/tmp/prospect.socket"
-    _ <- forkIO $ awaitTouch sock toggleReport
+    _ <- forkIO $ awaitTouch sock $ toggleBar barQueue
 
-    taskQueue <- newChan
-    writeChan taskQueue ()
-    worker taskQueue
+    tick barQueue
 
-toggleReport :: IO Infinite
-toggleReport = do
-    report <- statusReport
-    (Just dzenIn, _, _, _) <- createProcess $
-        (shell "dzen2 -y -1 -h 24")
-            { std_in = CreatePipe }
-    B.hPutStrLn dzenIn report
-    hFlush dzenIn
-    return $ Infinite $ hClose dzenIn >> return (Infinite toggleReport)
+tick :: Chan BarSignal -> IO ()
+tick barQueue = do
+    bat <- getBattery
+    writeChan barQueue (UpdateBar bat)
+    threadDelay $ 1000 * 1000 * 60
+    tick barQueue
 
-statusReport :: IO ByteString
-statusReport = do
-    -- general ones
-    bs <- mapM (\(f, command) -> fmap f (execShellGet command))
-        [ (volume, "amixer -c 1 get Master")
-        ]
-    -- special ones
-    bat <- fmap (maybe "(battery info error)" battery .
-        I.parseMaybe I.batteryInfos) $ execShellGet
-            "upower -i /org/freedesktop/UPower/devices/battery_BAT0"
-    stamp <- formattedTime
-    return $ B.intercalate " | " $ bat : stamp : bs
+getBattery :: IO (Maybe Battery)
+getBattery = fmap (P.parseMaybe P.battery) $
+    execShellGet "upower -i /org/freedesktop/UPower/devices/battery_BAT0"
 
-worker :: Chan () -> IO a
-worker taskQueue = do
-    readChan taskQueue
-    bat <- fmap (I.parseMaybe I.batteryInfos) $
-        execShellGet "upower -i /org/freedesktop/UPower/devices/battery_BAT0"
-    fromMaybe (return ()) $
-        bat >>= lookup Percentage >>= \ b ->
-            if readWord8 (rdrop 1 b) < 50
-                then return (notify b 2)
-                else return (return ())
-
-    _ <- forkIO $ timer 60 taskQueue
-    worker taskQueue
+barWorker :: Chan BarSignal -> Maybe Handle -> IO ()
+barWorker queue mhdl = do
+    sig <- readChan queue
+    case sig of
+        DeleteBar -> case mhdl of
+            Nothing -> barWorker queue mhdl
+            Just hdl -> hClose hdl >> barWorker queue Nothing
+        CreateBar -> do
+            mbat <- getBattery
+            upsertBar mbat mhdl
+        UpdateBar mbat -> warnBattery mbat >> case mhdl of
+            Nothing -> barWorker queue mhdl
+            Just hdl -> updateBar mbat hdl
   where
-    readWord8 :: ByteString -> Word8
-    readWord8 = read . B.unpack
+    upsertBar mbat (Just dzenIn) = updateBar mbat dzenIn
+    upsertBar mbat Nothing = do
+        (Just dzenIn, _, _, _) <- createProcess $
+            (shell "dzen2 -y -1 -h 20")
+                { std_in = CreatePipe }
+        updateBar mbat dzenIn
+    updateBar mbat dzenIn = do
+        report <- statusReport mbat
+        hPutBuilder dzenIn report
+        hFlush dzenIn
+        barWorker queue (Just dzenIn)
+    warnBattery mbat = maybeAct mbat $ \bat -> case bat of
+        Discharging p -> if p < 50
+            then notify (word8Dec p)
+            else return ()
+        _ -> return ()
 
-timer :: Int -> Chan () -> IO ()
-timer n taskQueue = do
-    threadDelay $ 1000 * 1000 * n
-    writeChan taskQueue ()
+toggleBar :: Chan BarSignal -> IO Infinite
+toggleBar queue = do
+    writeChan queue DeleteBar
+    return $ Infinite $ do
+        writeChan queue CreateBar
+        return (Infinite $ toggleBar queue)
 
-battery :: [(BatteryInfo, ByteString)] -> ByteString
-battery = (B.intercalate ", ") . map snd
+statusReport :: Maybe Battery -> IO Builder
+statusReport mbat = do
+    vol <- fmap volume $ execShellGet "amixer -c 1 get Master"
+    stamp <- formattedTime
+    return $ mconcat
+        [bat, stamp, byteString " | ", byteString vol, char8 '\n']
+  where
+    bat = maybe (byteString "(battery info error)") batteryFormatted mbat
 
 volume :: ByteString -> ByteString
 volume b = fromMaybe "(volume info error)" $
-    fmap ("Master " `mappend`) (I.parseMaybe I.volumeInfo b)
+    fmap ("Master " `mappend`) (P.parseMaybe P.volumeInfo b)
 
-formattedTime :: IO ByteString
-formattedTime = fmap (B.pack . localTimePrint fmt) localDateCurrent
+formattedTime :: IO Builder
+formattedTime = fmap (string8 . localTimePrint fmt) localDateCurrent
   where
     fmt =
         [ Format_Year4, Format_Text '-'
@@ -96,25 +110,20 @@ formattedTime = fmap (B.pack . localTimePrint fmt) localDateCurrent
 
 -- utility functions
 
-rdrop :: Int -> ByteString -> ByteString
-rdrop n b = B.take (B.length b - n) b
-
 execShellGet :: String -> IO ByteString
 execShellGet command = do
     (_, Just dateHdl, _, _) <- createProcess $
         (shell command) { std_out = CreatePipe }
     B.hGetContents dateHdl
 
-execShell :: String -> IO ()
-execShell command = createProcess (shell command) >> return ()
-
-notify :: ByteString -> Int -> IO ()
-notify text delay = (return () <<) $ forkIO $ do
+notify :: Builder -> IO ()
+notify text = do
     (Just dzenIn, _, _, _) <- createProcess $
-        (shell "dzen2 -x -600 -y 100 -tw 500 -h 24") { std_in = CreatePipe }
-    B.hPutStrLn dzenIn text
-    hFlush dzenIn
-    threadDelay $ 1000 * 1000 * delay
+        (shell "dzen2 -x -600 -y 100 -tw 200 -h 100 -p 3")
+            { std_in = CreatePipe }
+    hPutBuilder dzenIn $ text `mappend` char8 '\n'
     hClose dzenIn
-  where
-    (<<) = flip (>>)
+
+maybeAct :: Maybe a -> (a -> IO ()) -> IO ()
+maybeAct Nothing _ = return ()
+maybeAct (Just x) action = action x

@@ -2,14 +2,13 @@
 
 module Parser
     ( parseMaybe
-    , batteryInfos
+    , battery
     , volumeInfo
     ) where
 
-import Data.Maybe
-import Control.Applicative hiding (empty)
+import Control.Applicative
 
-import Data.ByteString (ByteString, empty)
+import Data.ByteString (ByteString)
 import Data.Attoparsec.ByteString.Char8
 
 import Battery
@@ -20,36 +19,35 @@ parseMaybe parser b = result (parse parser b)
     result :: Result r -> Maybe r
     result r = case r of
         Done _ raw -> Just raw
-        ir@(Partial _) -> result (feed ir empty)
+        ir@(Partial _) -> result (feed ir "")
         _ -> Nothing
 
-batteryInfos :: Parser [(BatteryInfo, ByteString)]
-batteryInfos = fmap catMaybes $ many batteryLine
+battery :: Parser Battery
+battery = skipLinesUntil $ do
+    string "    state:" >> skipSpaces
+    rakeTill '\n' >>= \ s -> case s of
+        "fully-charged" -> return FullyCharged
+        "discharging"   -> discharging
+        "charging"      -> charging
+        _               -> return $ UnknownBatteryState s
   where
-    batteryLine = picky <|> generous
-    picky = do
-        _ <- string "    "
-        choice
-            [ string "state:" >> complete BatteryState
-            , string "time to full:" >> complete TimeToFull
-            , string "percentage:" >> complete Percentage
-            , generous
-            ]
-    complete key = do
-        skipSpaces
-        value <- rakeTill '\n'
-        return $ Just (key, value)
-    generous = do
-        _ <- rakeTill '\n'
-        return Nothing
+    discharging = fmap Discharging percentage
+    percentage = skipLinesUntil $
+        string "    percentage:" >> skipSpaces >> decimal
+    charging = skipLinesUntil $ do
+        string "    time to full:" >> skipSpaces
+        time <- rakeTill '\n'
+        perc <- percentage
+        return $ Charging perc time
 
 volumeInfo :: Parser ByteString
-volumeInfo = keep <|> ditch
-  where
-    keep = string "  Mono:" >> rakeTill '[' >> takeTill (== ']')
-    ditch = rakeTill '\n' >> volumeInfo
+volumeInfo = skipLinesUntil $
+    string "  Mono:" >> rakeTill '[' >> takeTill (== ']')
 
 -- utilities
+
+skipLinesUntil :: Parser a -> Parser a
+skipLinesUntil p = p <|> (rakeTill '\n' >> skipLinesUntil p)
 
 rakeTill :: Char -> Parser ByteString
 rakeTill x = do
