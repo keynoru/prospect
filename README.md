@@ -6,7 +6,7 @@ The assumption is that you're using something bare-metal, like xmonad or a [comp
 - Date and time
 - Sound volume
 
-It also displays warning when the remaining battery is lower than 50%.
+It also displays warning when the battery is discharging and remaining power is lower than 50%.
 
 ## Why reinvent the wheel?
 

@@ -3,6 +3,7 @@
 module Main where
 
 import Data.Maybe
+import Control.Monad
 
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B
@@ -21,6 +22,7 @@ import Infinite
 import Socket
 
 data BarSignal = DeleteBar | CreateBar | UpdateBar (Maybe Battery)
+data DZenProcess = NoDZen | DZen Handle ProcessHandle
 
 main :: IO ()
 main = do
@@ -28,7 +30,7 @@ main = do
 
     barQueue <- newChan
     writeChan barQueue CreateBar
-    _ <- forkIO $ barWorker barQueue Nothing
+    _ <- forkIO $ barWorker barQueue NoDZen
 
     sock <- unixSocket "/tmp/prospect.socket"
     _ <- forkIO $ awaitTouch sock $ toggleBar barQueue
@@ -46,31 +48,32 @@ getBattery :: IO (Maybe Battery)
 getBattery = fmap (P.parseMaybe P.battery) $
     execShellGet "upower -i /org/freedesktop/UPower/devices/battery_BAT0"
 
-barWorker :: Chan BarSignal -> Maybe Handle -> IO ()
+barWorker :: Chan BarSignal -> DZenProcess -> IO ()
 barWorker queue mhdl = do
     sig <- readChan queue
     case sig of
         DeleteBar -> case mhdl of
-            Nothing -> barWorker queue mhdl
-            Just hdl -> hClose hdl >> barWorker queue Nothing
+            NoDZen -> barWorker queue mhdl
+            DZen hdl phdl ->
+                hClose hdl >> waitForProcess phdl >> barWorker queue NoDZen
         CreateBar -> do
             mbat <- getBattery
             upsertBar mbat mhdl
         UpdateBar mbat -> warnBattery mbat >> case mhdl of
-            Nothing -> barWorker queue mhdl
-            Just hdl -> updateBar mbat hdl
+            NoDZen -> barWorker queue mhdl
+            DZen hdl phdl -> updateBar mbat hdl phdl
   where
-    upsertBar mbat (Just dzenIn) = updateBar mbat dzenIn
-    upsertBar mbat Nothing = do
-        (Just dzenIn, _, _, _) <- createProcess $
+    upsertBar mbat NoDZen = do
+        (Just dzenIn, _, _, ph) <- createProcess $
             (shell "dzen2 -y -1 -h 20")
                 { std_in = CreatePipe }
-        updateBar mbat dzenIn
-    updateBar mbat dzenIn = do
+        updateBar mbat dzenIn ph
+    upsertBar mbat (DZen dzenIn ph) = updateBar mbat dzenIn ph
+    updateBar mbat dzenIn ph = do
         report <- statusReport mbat
         hPutBuilder dzenIn report
         hFlush dzenIn
-        barWorker queue (Just dzenIn)
+        barWorker queue (DZen dzenIn ph)
     warnBattery mbat = maybeAct mbat $ \bat -> case bat of
         Discharging p -> if p < 50
             then notify (word8Dec p)
@@ -112,17 +115,18 @@ formattedTime = fmap (string8 . localTimePrint fmt) localDateCurrent
 
 execShellGet :: String -> IO ByteString
 execShellGet command = do
-    (_, Just dateHdl, _, _) <- createProcess $
+    (_, Just dateHdl, _, pHandle) <- createProcess $
         (shell command) { std_out = CreatePipe }
-    B.hGetContents dateHdl
+    B.hGetContents dateHdl <* waitForProcess pHandle
 
 notify :: Builder -> IO ()
 notify text = do
-    (Just dzenIn, _, _, _) <- createProcess $
+    (Just dzenIn, _, _, pHandle) <- createProcess $
         (shell "dzen2 -x -600 -y 100 -tw 200 -h 100 -p 3")
             { std_in = CreatePipe }
     hPutBuilder dzenIn $ text `mappend` char8 '\n'
     hClose dzenIn
+    void $ waitForProcess pHandle
 
 maybeAct :: Maybe a -> (a -> IO ()) -> IO ()
 maybeAct Nothing _ = return ()
