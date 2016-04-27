@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Battery
     ( Battery(..)
     , batteryFormatted

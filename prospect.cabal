@@ -12,8 +12,13 @@ cabal-version:      >=1.18
 
 executable prospect
   main-is:          Main.hs
-  -- other-modules:
-  -- other-extensions:
+  other-modules:
+    Battery
+    Infinite
+    Parser
+    Socket
+  default-extensions:
+    OverloadedStrings
   build-depends:
     attoparsec == 0.*,
     hourglass == 0.*,
