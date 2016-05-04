@@ -29,14 +29,27 @@ app :: IO ()
 app = do
     CTime now <- epochTime
     mdate <- readProcess "date" ["--iso-8601"]
+    mcal <- readProcess "sh"
+        [ "-c"
+        , "cal | grep \" $(date +%e) \" | "
+        <> "sed -e \"s/\\($(date +%e)\\)/[\\1]/\""
+        ]
     bracket execDzen (\(p, _, _) -> eraseProcess p) $ \(_, hi, _) -> do
         hSetBuffering hi LineBuffering
-        loop hi (either line line mdate) now
+        loop hi (either line line mdate) (either line line mcal) now
   where
-    execDzen = rwProcess "dzen2" ["-p", "-fn", "Noto Mono-10", "-ta", "l"]
+    execDzen = rwProcess "dzen2"
+        ["-p", "-y", "-1", "-ta", "l", "-fn", "Noto Mono-10"]
 
-loop :: Handle -> ByteString -> Int64 -> IO a
-loop h prefix now = do
-    B.hPutBuilder h $ B.byteString prefix <> " " <> hms now <> "\n"
+loop :: Handle -> ByteString -> ByteString -> Int64 -> IO a
+loop h prefix suffix now = do
+    B.hPutBuilder h $ mconcat
+        [ B.byteString prefix
+        , " "
+        , hms now
+        , " | "
+        , B.byteString suffix
+        , "\n"
+        ]
     threadDelay $ 1000 * 1000
-    loop h prefix (now + 1)
+    loop h prefix suffix (now + 1)
