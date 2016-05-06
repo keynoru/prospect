@@ -11,11 +11,10 @@ module ByteString
 
 import Prelude hiding (readFile, writeFile, appendFile)
 import Control.Exception (bracket)
-import System.IO (IOMode(..), Handle, hClose)
+import System.IO (IOMode(..), Handle, hClose, stdout)
 import Data.ByteString as B hiding (readFile, writeFile, appendFile)
 import Data.ByteString.Builder as B
 import Data.ByteString.Lazy as LB (toStrict)
-import System.IO (stdout)
 import System.Posix.ByteString
 
 defaultFlags :: OpenFileFlags

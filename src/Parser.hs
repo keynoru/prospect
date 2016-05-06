@@ -4,6 +4,7 @@ module Parser
     ) where
 
 import Control.Applicative
+import Control.Monad
 
 import Data.ByteString (ByteString)
 import Data.Attoparsec.ByteString.Char8
@@ -34,4 +35,4 @@ rakeTill x = do
     return s
 
 skipSpaces :: Parser ()
-skipSpaces = takeTill (not . isSpace) >> return ()
+skipSpaces = void $ takeTill (not . isSpace)
