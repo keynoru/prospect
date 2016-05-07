@@ -27,6 +27,7 @@ line = B.takeWhile (/= 10)
 
 app :: IO ()
 app = do
+    args <- getArgs
     CTime now <- epochTime
     mdate <- readProcess "date" ["--iso-8601"]
     mcal <- readProcess "sh"
@@ -34,17 +35,21 @@ app = do
         , "cal | grep \" $(date +%e) \" | "
         <> "sed -e \"s/\\($(date +%e)\\)/[\\1]/\""
         ]
-    bracket execDzen (\(p, _, _) -> eraseProcess p) $ \(_, hi, _) -> do
+    bracket (dzen args) (\(p, _, _) -> eraseProcess p) $ \(_, hi, _) -> do
         hSetBuffering hi LineBuffering
-        loop hi (either line line mdate) (either line line mcal) now
+        putter hi (either line line mdate) (either line line mcal) now
   where
-    execDzen = rwProcess "dzen2"
-        ["-p", "-y", "-1", "-ta", "l", "-fn", "Noto Mono-10"]
+    dzen args = rwProcess "dzen2" $
+        [ "-p", "-y", "-1"
+        , "-fg", "#ffffff", "-bg", "#004999"
+        ] ++ args
 
-loop :: Handle -> ByteString -> ByteString -> Int64 -> IO a
-loop h prefix suffix now = do
+-- putter puts one line per second, with fixed prefixes and suffixes.
+putter :: Handle -> ByteString -> ByteString -> Int64 -> IO a
+putter h prefix suffix now = do
     B.hPutBuilder h $ mconcat
-        [ B.byteString prefix
+        [ " "
+        , B.byteString prefix
         , " "
         , hms now
         , " | "
@@ -52,4 +57,4 @@ loop h prefix suffix now = do
         , "\n"
         ]
     threadDelay $ 1000 * 1000
-    loop h prefix suffix (now + 1)
+    putter h prefix suffix (now + 1)
