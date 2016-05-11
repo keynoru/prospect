@@ -90,7 +90,7 @@ consumer h chan date now cal battery = do
             MsgDebugClockDiff _ _ -> (date, now, cal, battery)
     case msg of
         MsgDebugClockDiff origin x -> B.putBuilder $ mconcat
-            [ B.int64Dec (nnow - origin)
+            [ B.int64Dec (x - origin)
             , " seconds since the beginning. Internal clock is "
             , B.int64Dec $ x - nnow
             , " seconds behind.\n"
