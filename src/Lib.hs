@@ -2,6 +2,7 @@ module Lib (app) where
 
 import Data.Int
 import Data.Monoid
+import Control.Monad
 import Control.Exception
 
 import System.IO (Handle, hClose, hSetBuffering, BufferMode(..))
@@ -21,6 +22,7 @@ data Message
     | MsgDate ByteString
     | MsgCal ByteString
     | MsgBattery ByteString
+    | MsgDebugClockDiff Int64 Int64
 
 hms :: Int64 -> Builder
 hms x = mconcat [d ((h + 9) `mod` 24), ":", d m, ":", d s]
@@ -34,8 +36,10 @@ hms x = mconcat [d ((h + 9) `mod` 24), ":", d m, ":", d s]
 line :: ByteString -> ByteString
 line = B.takeWhile (/= 10)
 
+-- producers
+
 dayChangeProducer :: TChan Message -> IO a
-dayChangeProducer chan = do
+dayChangeProducer chan = forever $ do
     CTime now <- epochTime
     mdate <- readProcess "date" ["--iso-8601"]
     mcal <- readProcess "sh"
@@ -44,45 +48,31 @@ dayChangeProducer chan = do
         <> "sed -e \"s/\\($(date +%e)\\)/[\\1]/\""
         ]
     atomically $ do
-        writeTChan chan (MsgClockSet (now - 1))
+        writeTChan chan (MsgClockSet now)
         writeTChan chan (MsgDate $ either line line mdate)
         writeTChan chan (MsgCal $ either line line mcal)
     threadDelay $ (1000 * 1000 *) $
         86400 - ((fromIntegral now + 9 * 3600) `mod` 86400)
-    dayChangeProducer chan
 
 tickProducer :: TChan Message -> IO a
-tickProducer chan = do
+tickProducer chan = forever $ do
     threadDelay $ 1000 * 1000
     atomically $ writeTChan chan MsgClockTick
-    tickProducer chan
 
 batteryProducer :: TChan Message -> IO a
-batteryProducer chan = do
+batteryProducer chan = forever $ do
     mbat <- readProcess "acpi" []
     atomically $ writeTChan chan (MsgBattery $ either line line mbat)
     threadDelay $ 60 * 1000 * 1000
-    batteryProducer chan
 
-app :: IO ()
-app = do
-    args <- getArgs
-    chan <- atomically newTChan
-    bracket (dzen args) cleanup $ \(_, hi, _) -> do
-        hSetBuffering hi LineBuffering
-        _ <- forkIO $ dayChangeProducer chan
-        _ <- forkIO $ batteryProducer chan
-        _ <- forkIO $ tickProducer chan
-        consumer hi chan "" 0 "" ""
-  where
-    dzen args = rwProcess "dzen2" $
-        [ "-p", "-y", "-1"
-        , "-fg", "#ffffff", "-bg", "#004999"
-        ] ++ args
-    cleanup (p, hi, ho) = do
-        hClose hi
-        hClose ho
-        eraseProcess p
+debugClockProducer :: TChan Message -> Int64 -> IO a
+debugClockProducer chan origin = forever $ do
+    threadDelay $ 3 * 1000 * 1000
+    CTime now <- epochTime
+    atomically $ writeTChan chan (MsgDebugClockDiff origin now)
+    threadDelay $ 57 * 1000 * 1000
+
+-- consumers
 
 consumer
     :: Handle -> TChan Message
@@ -97,6 +87,15 @@ consumer h chan date now cal battery = do
             MsgDate b -> (b, now, cal, battery)
             MsgCal b -> (date, now, b, battery)
             MsgBattery b -> (date, now, cal, b)
+            MsgDebugClockDiff _ _ -> (date, now, cal, battery)
+    case msg of
+        MsgDebugClockDiff origin x -> B.putBuilder $ mconcat
+            [ B.int64Dec (nnow - origin)
+            , " seconds since the beginning. Internal clock is "
+            , B.int64Dec $ x - nnow
+            , " seconds behind.\n"
+            ]
+        _ -> return ()
     B.hPutBuilder h $ mconcat
         [ " "
         , B.byteString ndate
@@ -110,3 +109,26 @@ consumer h chan date now cal battery = do
         ]
     consumer h chan ndate nnow ncal nbattery
 
+-- application
+
+app :: IO ()
+app = do
+    args <- getArgs
+    chan <- atomically newTChan
+    CTime now <- epochTime
+    bracket (dzen args) cleanup $ \(_, hi, _) -> do
+        hSetBuffering hi LineBuffering
+        void $ forkIO $ dayChangeProducer chan
+        void $ forkIO $ batteryProducer chan
+        void $ forkIO $ tickProducer chan
+        void $ forkIO $ debugClockProducer chan now
+        consumer hi chan "" 0 "" ""
+  where
+    dzen args = rwProcess "dzen2" $
+        [ "-p", "-y", "-1"
+        , "-fg", "#ffffff", "-bg", "#004999"
+        ] ++ args
+    cleanup (p, hi, ho) = do
+        hClose hi
+        hClose ho
+        eraseProcess p
