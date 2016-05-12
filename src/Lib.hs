@@ -11,10 +11,12 @@ import Control.Concurrent.STM
 
 import System.Posix.ByteString
 import Foreign.C.Types (CTime(..))
+import System.Exit
 
 import RawFilePath
 import ByteString (ByteString, Builder)
 import qualified ByteString as B
+import qualified Data.Attoparsec.ByteString.Char8 as A
 
 data Message
     = MsgClockTick
@@ -76,9 +78,9 @@ debugClockProducer chan origin = forever $ do
 
 consumer
     :: Handle -> TChan Message
-    -> ByteString -> Int64 -> ByteString -> ByteString
+    -> Int64 -> ByteString -> Int64 -> ByteString -> ByteString
     -> IO a
-consumer h chan date now cal battery = do
+consumer h chan up date now cal battery = do
     msg <- atomically $ readTChan chan
     let
         (ndate, nnow, ncal, nbattery) = case msg of
@@ -101,13 +103,15 @@ consumer h chan date now cal battery = do
         , B.byteString ndate
         , " "
         , hms now
+        , " | uptime "
+        , hms (now - up)
         , " | "
         , B.byteString ncal
         , " | "
         , B.byteString nbattery
         , "\n"
         ]
-    consumer h chan ndate nnow ncal nbattery
+    consumer h chan up ndate nnow ncal nbattery
 
 -- application
 
@@ -116,18 +120,28 @@ app = do
     args <- getArgs
     chan <- atomically newTChan
     CTime now <- epochTime
+    up <- getUpSince >>= \case
+        Left err -> B.putStr (err <> "Failed getting uptime") *> exitFailure
+        Right x -> case A.parseOnly A.decimal (line x) of
+            Left err -> do
+                putStrLn err
+                B.putBuilder $ "Failed parsing " <> B.byteString x
+                exitFailure
+            Right n -> return (n + 32400)
     bracket (dzen args) cleanup $ \(_, hi, _) -> do
         hSetBuffering hi LineBuffering
         void $ forkIO $ dayChangeProducer chan
         void $ forkIO $ batteryProducer chan
         void $ forkIO $ tickProducer chan
         void $ forkIO $ debugClockProducer chan now
-        consumer hi chan "" 0 "" ""
+        consumer hi chan up "" 0 "" ""
   where
     dzen args = rwProcess "dzen2" $
         [ "-p", "-y", "-1"
         , "-fg", "#ffffff", "-bg", "#004999"
         ] ++ args
+    getUpSince = readProcess "sh"
+        ["-c", "uptime -s | xargs -0 date +%s --date"]
     cleanup (p, hi, ho) = do
         hClose hi
         hClose ho
