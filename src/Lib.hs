@@ -24,7 +24,6 @@ data Message
     | MsgDate ByteString
     | MsgCal ByteString
     | MsgBattery ByteString
-    | MsgDebugClockDiff Int64 Int64
 
 hms :: Int64 -> Builder
 hms x = mconcat [d ((h + 9) `mod` 24), ":", d m, ":", d s]
@@ -58,7 +57,7 @@ dayChangeProducer chan = forever $ do
 
 tickProducer :: TChan Message -> IO a
 tickProducer chan = forever $ do
-    threadDelay $ 999 * 1000
+    threadDelay 999100
     atomically $ writeTChan chan MsgClockTick
 
 batteryProducer :: TChan Message -> IO a
@@ -67,12 +66,11 @@ batteryProducer chan = forever $ do
     atomically $ writeTChan chan (MsgBattery $ either line line mbat)
     threadDelay $ 60 * 1000 * 1000
 
-debugClockProducer :: TChan Message -> Int64 -> IO a
-debugClockProducer chan origin = forever $ do
-    threadDelay $ 3 * 1000 * 1000
+adjustmentProducer :: TChan Message -> IO a
+adjustmentProducer chan = forever $ do
+    threadDelay $ 60 * 1000 * 1000
     CTime now <- epochTime
-    atomically $ writeTChan chan (MsgDebugClockDiff origin now)
-    threadDelay $ 57 * 1000 * 1000
+    atomically $ writeTChan chan (MsgClockSet now)
 
 -- consumers
 
@@ -89,15 +87,6 @@ consumer h chan up date now cal battery = do
             MsgDate b -> (b, now, cal, battery)
             MsgCal b -> (date, now, b, battery)
             MsgBattery b -> (date, now, cal, b)
-            MsgDebugClockDiff _ _ -> (date, now, cal, battery)
-    case msg of
-        MsgDebugClockDiff origin x -> B.putBuilder $ mconcat
-            [ B.int64Dec (x - origin)
-            , " seconds since the beginning. Internal clock is "
-            , B.int64Dec $ x - nnow
-            , " seconds behind.\n"
-            ]
-        _ -> return ()
     B.hPutBuilder h $ mconcat
         [ " "
         , B.byteString ndate
@@ -119,7 +108,6 @@ app :: IO ()
 app = do
     args <- getArgs
     chan <- atomically newTChan
-    CTime now <- epochTime
     up <- getUpSince >>= \case
         Left err -> B.putStr (err <> "Failed getting uptime") *> exitFailure
         Right x -> case A.parseOnly A.decimal (line x) of
@@ -133,7 +121,7 @@ app = do
         void $ forkIO $ dayChangeProducer chan
         void $ forkIO $ batteryProducer chan
         void $ forkIO $ tickProducer chan
-        void $ forkIO $ debugClockProducer chan now
+        void $ forkIO $ adjustmentProducer chan
         consumer hi chan up "" 0 "" ""
   where
     dzen args = rwProcess "dzen2" $
