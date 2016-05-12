@@ -56,7 +56,7 @@ dayChangeProducer chan = forever $ do
 
 tickProducer :: TChan Message -> IO a
 tickProducer chan = forever $ do
-    threadDelay $ 1000 * 1000
+    threadDelay $ 999 * 1000
     atomically $ writeTChan chan MsgClockTick
 
 batteryProducer :: TChan Message -> IO a
