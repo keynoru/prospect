@@ -77,15 +77,17 @@ readProcess cmd args = do
         executeFile cmd True args Nothing
     closeFd fd1
     closeFd efd1
-    content <- fdToHandle fd0 >>= B.hGetContents
+    content <- closeFd efd0 *> getAndClose fd0
     getProcessStatus True False pid >>= \ mstatus -> case mstatus of
         Just status -> case status of
             Exited exitCode -> case exitCode of
                 ExitSuccess -> return $ Right content
                 ExitFailure _ -> fmap Left $
-                    fdToHandle efd0 >>= B.hGetContents
+                    closeFd fd0 *> getAndClose efd0
             _ -> die cmd
         Nothing -> die cmd
+  where
+    getAndClose fd = fdToHandle fd >>= \h -> B.hGetContents h <* hClose h
 
 rwProcess
     :: RawFilePath -> [ByteString]
