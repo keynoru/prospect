@@ -42,11 +42,12 @@ line = B.takeWhile (/= 10)
 dayChangeProducer :: TChan Message -> IO a
 dayChangeProducer chan = forever $ do
     CTime now <- epochTime
-    mdate <- readProcess "date" ["--iso-8601"]
+    mdate <- readProcess "date" ["+%Y-%m-%d (%a)"]
     mcal <- readProcess "sh"
         [ "-c"
         , "cal | grep \"$(date +%e) \" | "
-        <> "sed -e \"s/\\($(date +%e)\\)/[\\1]/\""
+        <> "sed -e \"s/\\($(date +%e)\\)/^bg(white)^fg(#2AA198) \\1 "
+        <> "^bg(#2AA198)^fg(white)/\""
         ]
     atomically $ do
         writeTChan chan (MsgClockSet now)
@@ -88,15 +89,15 @@ consumer h chan up date now cal battery = do
             MsgCal b -> (date, now, b, battery)
             MsgBattery b -> (date, now, cal, b)
     B.hPutBuilder h $ mconcat
-        [ " "
+        [ "^bg(#268BD2)^fg(#FDF6E3) system ^bg(#FFCC00)^fg(#268BD2)\57520^fg(black) "
         , B.byteString ndate
         , " "
         , hms now
-        , " | uptime "
+        , " ^bg(#073642)^fg(#FFCC00)\57520^fg(white) uptime "
         , hms (now - up)
-        , " | "
+        , " ^bg(#2AA198)^fg(#073642)\57520^fg(white) "
         , B.byteString ncal
-        , " | "
+        , " ^bg(#FFCC00)^fg(#2AA198)\57520^fg(black) "
         , B.byteString nbattery
         , "\n"
         ]
@@ -125,7 +126,7 @@ app = do
         consumer hi chan up "" 0 "" ""
   where
     dzen args = rwProcess "dzen2" $
-        [ "-p", "-y", "-1"
+        [ "-p", "-y", "-1", "-ta", "l"
         , "-fg", "#ffffff", "-bg", "#004999"
         ] ++ args
     getUpSince = readProcess "sh"
