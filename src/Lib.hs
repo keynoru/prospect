@@ -45,7 +45,7 @@ dayProducer chan = forever $ do
     mdate <- readProcess "date" ["+%Y-%m-%d (%a)"]
     mcal <- readProcess "sh"
         [ "-c"
-        , "cal | grep \"$(date +%e) \" | "
+        , "cal | awk 'NR > 1' | grep \"$(date +%e) \" | "
         <> "sed -e \"s/\\($(date +%e)\\)/^bg(white)^fg(#2AA198) \\1 "
         <> "^bg(#2AA198)^fg(white)/\""
         ]
@@ -88,7 +88,7 @@ consumer h chan up date now cal battery = do
         , timeOfDay (nnow - up)
         , " ^bg(#2AA198)^fg(#073642)\57520^fg(white) "
         , B.byteString ncal
-        , " ^bg(#FFCC00)^fg(#2AA198)\57520^fg(black) "
+        , "^bg(#FFCC00)^fg(#2AA198)\57520^fg(black) "
         , B.byteString nbattery
         , "\n"
         ]
