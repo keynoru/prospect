@@ -34,6 +34,19 @@ timeOfDay x = mconcat [d ((h + 9) `mod` 24), ":", d m]
     (h, remainder) = (x `mod` 86400) `divMod` 3600
     m = remainder `div` 60
 
+timeGap :: Int64 -> Builder
+timeGap x
+    | d /= 0 = mconcat [day, hour, minute]
+    | h /= 0 = mconcat [hour, minute]
+    | otherwise = minute
+  where
+    (d, daySeconds) = x `divMod` 86400
+    (h, hourSeconds) = daySeconds `divMod` 3600
+    m = hourSeconds `div` 60
+    day = B.int64Dec d <> "d "
+    hour = B.int64Dec h <> "h "
+    minute = B.int64Dec m <> "m"
+
 line :: ByteString -> ByteString
 line = B.takeWhile (/= 10)
 
@@ -46,8 +59,8 @@ dayProducer chan = forever $ do
     mcal <- readProcess "sh"
         [ "-c"
         , "cal | awk 'NR > 1' | grep \"$(date +%e) \" | "
-        <> "sed -e \"s/\\($(date +%e)\\)/^bg(white)^fg(#2AA198) \\1 "
-        <> "^bg(#2AA198)^fg(white)/\""
+        <> "sed -e \"s/\\($(date +%e)\\)/^bg(black)^fg(#FFCC00) \\1 "
+        <> "^bg(#FFCC00)^fg(black)/\""
         ]
     atomically $ do
         writeTChan chan (MsgDate $ either line line mdate)
@@ -80,19 +93,21 @@ consumer h chan up date now cal battery = do
             MsgCal b -> (date, now, b, battery)
             MsgBattery b -> (date, now, cal, b)
     B.hPutBuilder h $ mconcat
-        [ "^bg(#268BD2)^fg(#FDF6E3) system ^bg(#FFCC00)^fg(#268BD2)\57520^fg(black) "
+        [ " 💻 system \57521 📅 "
         , B.byteString ndate
-        , " "
+        , " ⌚ "
         , timeOfDay nnow
-        , " ^bg(#073642)^fg(#FFCC00)\57520^fg(white) uptime "
-        , timeOfDay (nnow - up)
-        , " ^bg(#2AA198)^fg(#073642)\57520^fg(white) "
+        , " \57521 ⌛ up "
+        , timeGap (nnow - up)
+        , " \57521 "
         , B.byteString ncal
-        , "^bg(#FFCC00)^fg(#2AA198)\57520^fg(black) "
-        , B.byteString nbattery
+        , "\57521 ⚡️"
+        , B.byteString (bat nbattery)
         , "\n"
         ]
     consumer h chan up ndate nnow ncal nbattery
+  where
+    bat b = if "Battery 0: " `B.isPrefixOf` b then B.drop 11 b else b
 
 -- application
 
@@ -107,7 +122,7 @@ app = do
                 putStrLn err
                 B.putBuilder $ "Failed parsing " <> B.byteString x
                 exitFailure
-            Right n -> return (n + 32400)
+            Right n -> return n
     bracket (dzen args) cleanup $ \(_, hi, _) -> do
         hSetBuffering hi LineBuffering
         void $ forkIO $ dayProducer chan
@@ -116,7 +131,7 @@ app = do
   where
     dzen args = rwProcess "dzen2" $
         [ "-p", "-y", "-1", "-ta", "l"
-        , "-fg", "#ffffff", "-bg", "#004999"
+        , "-fg", "black", "-bg", "#ffcc00"
         ] ++ args
     getUpSince = readProcess "sh"
         ["-c", "uptime -s | xargs -0 date +%s --date"]
